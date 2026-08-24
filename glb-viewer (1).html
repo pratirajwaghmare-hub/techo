@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GLB Model Viewer — Three.js</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #1a1a2e;
+    font-family: system-ui, sans-serif;
+  }
+  #viewer {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #ui {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    color: #eee;
+    background: rgba(0,0,0,0.5);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    max-width: 280px;
+  }
+  #ui input[type="file"] {
+    display: block;
+    margin-top: 8px;
+    color: #eee;
+  }
+  #status {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #9fd8ff;
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <strong>GLB Model Viewer</strong>
+  <input type="file" id="fileInput" accept=".glb,.gltf" />
+  <button id="downloadBtn" disabled style="margin-top:10px;padding:6px 12px;border-radius:6px;border:none;background:#4a7fd6;color:#fff;cursor:pointer;">
+    Download GLB
+  </button>
+  <div id="status">Drop a .glb file above, or drag one onto the canvas.</div>
+</div>
+<canvas id="viewer"></canvas>
+
+<!-- Three.js core + GLTFLoader + OrbitControls, loaded from CDN as ES modules -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+  import * as THREE from 'three';
+  import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+  import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+  import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+  const canvas = document.getElementById('viewer');
+  const statusEl = document.getElementById('status');
+  const fileInput = document.getElementById('fileInput');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  // --- Basic scene setup ---
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1a2e);
+
+  const camera = new THREE.PerspectiveCamera(
+    50, window.innerWidth / window.innerHeight, 0.1, 1000
+  );
+  camera.position.set(3, 2, 5);
+
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+
+  // Lighting — GLB models need light to be visible
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+  dirLight.position.set(5, 10, 7);
+  scene.add(dirLight);
+
+  // Ground grid for reference
+  scene.add(new THREE.GridHelper(10, 10, 0x444466, 0x22223a));
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  let currentModel = null;
+  const loader = new GLTFLoader();
+
+  // --- Core function: import a GLB file ---
+  function loadGLB(url, label) {
+    statusEl.textContent = `Loading ${label}...`;
+    loader.load(
+      url,
+      (gltf) => {
+        if (currentModel) scene.remove(currentModel);
+        currentModel = gltf.scene;
+        scene.add(currentModel);
+
+        // Auto-center and scale the model to fit the view
+        const box = new THREE.Box3().setFromObject(currentModel);
+        const size = box.getSize(new THREE.Vector3()).length();
+        const center = box.getCenter(new THREE.Vector3());
+        currentModel.position.sub(center);
+        camera.position.set(size * 0.6, size * 0.4, size * 0.8);
+        controls.update();
+
+        statusEl.textContent = `Loaded: ${label}`;
+        downloadBtn.disabled = false;
+      },
+      (progress) => {
+        if (progress.total) {
+          const pct = Math.round((progress.loaded / progress.total) * 100);
+          statusEl.textContent = `Loading ${label}: ${pct}%`;
+        }
+      },
+      (error) => {
+        console.error(error);
+        statusEl.textContent = `Error loading ${label}`;
+      }
+    );
+  }
+
+  // Load a default placeholder cube shown until a user picks a file
+  function showPlaceholder() {
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x6fa8ff });
+    currentModel = new THREE.Mesh(geo, mat);
+    scene.add(currentModel);
+    statusEl.textContent = 'No model loaded — showing placeholder cube.';
+    downloadBtn.disabled = false;
+  }
+  showPlaceholder();
+
+  // --- Export current model back to a .glb file and download it ---
+  const exporter = new GLTFExporter();
+
+  function downloadGLB() {
+    if (!currentModel) return;
+    statusEl.textContent = 'Exporting...';
+    exporter.parse(
+      currentModel,
+      (result) => {
+        // result is an ArrayBuffer when binary:true is set below
+        const blob = new Blob([result], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'model.glb';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        statusEl.textContent = 'Downloaded model.glb';
+      },
+      (error) => {
+        console.error(error);
+        statusEl.textContent = 'Export failed';
+      },
+      { binary: true } // binary:true => outputs .glb instead of .gltf+json
+    );
+  }
+
+  downloadBtn.addEventListener('click', downloadGLB);
+
+  // --- File input handling: user selects a local .glb file ---
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    loadGLB(url, file.name);
+  });
+
+  // --- Drag & drop support ---
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file && (file.name.endsWith('.glb') || file.name.endsWith('.gltf'))) {
+      const url = URL.createObjectURL(file);
+      loadGLB(url, file.name);
+    }
+  });
+
+  // --- Resize handling ---
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // --- Render loop ---
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
+</script>
+
+</body>
+</html>
